@@ -1,0 +1,14 @@
+[package]
+name = "testing-libcosmic"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+catppuccin = "2.5.1"
+chrono = "0.4.39"
+hyprland = "0.4.0-beta.2"
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic"
+default-features = false
+features = ["applet-token"]

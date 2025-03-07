@@ -1,0 +1,45 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'testing-libcosmic'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=testing-libcosmic",
+                    "--package=testing-libcosmic"
+                ],
+                "filter": {
+                    "name": "testing-libcosmic",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'testing-libcosmic'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=testing-libcosmic",
+                    "--package=testing-libcosmic"
+                ],
+                "filter": {
+                    "name": "testing-libcosmic",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
