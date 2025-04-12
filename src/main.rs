@@ -1,9 +1,8 @@
 use cosmic::cctk;
 use cosmic::cctk::sctk::shell::wlr_layer::Anchor;
+use cosmic::iced::futures::{SinkExt, StreamExt};
 use cosmic::iced::{self, Subscription};
 use cosmic::iced_widget::row;
-use hyprland::data::Workspaces;
-use hyprland::data::*;
 use hyprland::prelude::*;
 use hyprland::shared::HyprData;
 use iced::border::radius;
@@ -14,14 +13,12 @@ use iced::{Border, Element, Event, Length, Padding, Task, Theme, event, time, wi
 
 use chrono::Local;
 
-/// The application model type.  See [the cosmic::iced book](https://book.cosmic::iced.rs/) for details.
 #[derive(Debug)]
 pub struct State {
     count: u32,
     active_workspace: i32,
 }
 
-/// Root struct of application
 pub struct Shell {
     state: State,
 }
@@ -35,21 +32,25 @@ pub enum ShellMessage {
     HyprlandEvent(hyprland::event_listener::Event),
     HyprlandError,
     SetWorkspace(i32),
+    ShortcutError(String),
+    ShortcutActivated(String),
+    ShortcutsSetup,
 }
 
 impl Shell {
     pub fn new() -> (Self, Task<ShellMessage>) {
         let id = window::Id::unique();
 
+        let bar_size = Some((None, Some(30)));
+        let exclusive_zone = 30;
+
         let layer_shell_task = get_layer_surface(
             iced::platform_specific::runtime::wayland::layer_surface::SctkLayerSurfaceSettings {
                 id,
-                size: Some((Some(0), Some(30))),
-                pointer_interactivity: true,
-                keyboard_interactivity: cctk::sctk::shell::wlr_layer::KeyboardInteractivity::None,
+                size: bar_size,
                 layer: cctk::sctk::shell::wlr_layer::Layer::Top,
                 anchor: Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
-                exclusive_zone: 20,
+                exclusive_zone: exclusive_zone,
                 ..Default::default()
             },
         );
@@ -67,7 +68,6 @@ impl Shell {
         )
     }
 
-    /// Entry-point from `cosmic::iced`` into app to construct UI
     pub fn view(&self, _id: window::Id) -> Element<'_, ShellMessage> {
         container(
             row![
@@ -112,7 +112,6 @@ impl Shell {
         .into()
     }
 
-    /// Entry-point from `cosmic::iced` to handle user and system events
     pub fn update(&mut self, message: ShellMessage) -> Task<ShellMessage> {
         match message {
             ShellMessage::TimeTick(_) => Task::none(),
@@ -132,10 +131,7 @@ impl Shell {
                     self.state.active_workspace = data.id;
                     Task::none()
                 }
-                _ => {
-                    dbg!(event);
-                    Task::none()
-                }
+                _ => Task::none(),
             },
             ShellMessage::SetWorkspace(id) => {
                 use hyprland::dispatch;
@@ -144,46 +140,95 @@ impl Shell {
                 let _ = dispatch!(Workspace, dispatch::WorkspaceIdentifierWithSpecial::Id(id));
                 Task::none()
             }
+            ShellMessage::ShortcutActivated(thing) => {
+                dbg!(thing);
+                Task::none()
+            }
+            ShellMessage::ShortcutError(thing) => {
+                match thing.as_str() {
+                    "Hello" => println!("Hehe"),
+                    _ => println!("Shouldn't happen! Shortcut ID {} is not handled!", thing) // TODO: Enums and hashmaps? We'll see!
+                }
+                println!("{}", thing);
+                Task::none()
+            }
+            ShellMessage::ShortcutsSetup => {
+                dbg!("Shortcuts Setup");
+                Task::none()
+            }
         }
     }
 
     pub fn subscription(&self) -> iced::Subscription<ShellMessage> {
-        iced::Subscription::batch([
-            time::every(std::time::Duration::from_millis(100)).map(ShellMessage::TimeTick),
-            event::listen_with(|event, _status, _| match event {
-                Event::PlatformSpecific(event::PlatformSpecific::Wayland(
-                    event::wayland::Event::Layer(e, ..),
-                )) => {
-                    dbg!(e);
-                    None
-                }
-                _ => None,
-            }),
-            Subscription::run(|| hyprland::event_listener::EventStream::new()).map(|hyprevent| {
-                match hyprevent {
-                    Ok(result) => ShellMessage::HyprlandEvent(result),
-                    Err(_) => ShellMessage::HyprlandError,
-                }
-            }),
-        ])
+        iced::Subscription::batch({
+            let subscriptions = vec![
+                time::every(std::time::Duration::from_millis(100)).map(ShellMessage::TimeTick),
+                event::listen_with(|event, _status, _| match event {
+                    Event::PlatformSpecific(event::PlatformSpecific::Wayland(
+                        event::wayland::Event::Layer(e, ..),
+                    )) => {
+                        dbg!(e);
+                        None
+                    }
+                    _ => None,
+                }),
+                Subscription::run(|| hyprland::event_listener::EventStream::new()).map(
+                    |hyprevent| match hyprevent {
+                        Ok(result) => ShellMessage::HyprlandEvent(result),
+                        Err(_) => ShellMessage::HyprlandError,
+                    },
+                ),
+                Subscription::run(|| {
+                    iced::stream::channel(10, async |mut output| {
+                        let proxy =
+                            match ashpd::desktop::global_shortcuts::GlobalShortcuts::new().await {
+                                Ok(proxy) => proxy,
+                                Err(error) => {
+                                    dbg!(error);
+                                    return;
+                                }
+                            };
+
+                        let session = match proxy.create_session().await {
+                            Ok(session) => session,
+                            Err(error) => {
+                                dbg!(error);
+                                return;
+                            }
+                        };
+
+                        let shortcuts = vec![ashpd::desktop::global_shortcuts::NewShortcut::new(
+                            "Hello",
+                            "This does a thing",
+                        )];
+
+                        let _ = proxy.bind_shortcuts(&session, &shortcuts, None).await;
+
+                        let mut stream = match proxy.receive_activated().await {
+                            Ok(stream) => stream,
+                            Err(error) => {
+                                dbg!(error);
+                                return;
+                            }
+                        };
+
+                        loop {
+                            if let Some(event) = stream.next().await {
+                                let _ = output.send(ShellMessage::ShortcutActivated(event.shortcut_id().to_string())).await;
+                            };
+                            
+                        }
+                    })
+                }),
+            ];
+
+            subscriptions
+        })
     }
 }
 
 fn main() -> iced::Result {
-    let iced_settings = iced::settings::Settings {
-        id: Some("Testing".to_string()),
-        fonts: vec![],
-        antialiasing: true,
-        exit_on_close_request: true,
-        is_daemon: false,
-        ..Default::default()
-    };
-
-    // A function that returns the app struct
-    let app_factory = || Shell::new();
-
     iced::daemon("Testing", Shell::update, Shell::view)
-        .settings(iced_settings)
         .subscription(Shell::subscription)
-        .run_with(app_factory)
+        .run_with(Shell::new)
 }
