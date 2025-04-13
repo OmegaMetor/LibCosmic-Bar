@@ -1,5 +1,6 @@
 use cosmic::cctk;
 use cosmic::cctk::sctk::shell::wlr_layer::Anchor;
+use cosmic::iced::alignment::Vertical;
 use cosmic::iced::futures::{SinkExt, StreamExt};
 use cosmic::iced::{self, Subscription};
 use cosmic::iced_widget::row;
@@ -71,7 +72,7 @@ impl Shell {
     pub fn view(&self, _id: window::Id) -> Element<'_, ShellMessage> {
         container(
             row![
-                iced::widget::button(text(self.state.count)).on_press(ShellMessage::ButtonPressed),
+                text(self.state.count),
                 iced::widget::row({
                     let mut workspaces = hyprland::data::Workspaces::get().unwrap().to_vec();
 
@@ -95,6 +96,7 @@ impl Shell {
                     Local::now().format("%A, %B %e, %Y  %H:%M:%S")
                 )),
             ]
+            .align_y(Vertical::Center)
             .spacing(10)
             .width(Length::Fill)
             .height(Length::Fill)
@@ -141,15 +143,14 @@ impl Shell {
                 Task::none()
             }
             ShellMessage::ShortcutActivated(thing) => {
-                dbg!(thing);
-                Task::none()
-            }
-            ShellMessage::ShortcutError(thing) => {
                 match thing.as_str() {
-                    "Hello" => println!("Hehe"),
+                    "Hello" => {println!("Shortcut activated"); self.state.count += 1;},
                     _ => println!("Shouldn't happen! Shortcut ID {} is not handled!", thing) // TODO: Enums and hashmaps? We'll see!
                 }
-                println!("{}", thing);
+                Task::none()
+            }
+            ShellMessage::ShortcutError(error) => {
+                dbg!(error);
                 Task::none()
             }
             ShellMessage::ShortcutsSetup => {
@@ -204,7 +205,7 @@ impl Shell {
 
                         let _ = proxy.bind_shortcuts(&session, &shortcuts, None).await;
 
-                        let mut stream = match proxy.receive_activated().await {
+                        let mut activated_stream = match proxy.receive_activated().await {
                             Ok(stream) => stream,
                             Err(error) => {
                                 dbg!(error);
@@ -213,7 +214,7 @@ impl Shell {
                         };
 
                         loop {
-                            if let Some(event) = stream.next().await {
+                            if let Some(event) = activated_stream.next().await {
                                 let _ = output.send(ShellMessage::ShortcutActivated(event.shortcut_id().to_string())).await;
                             };
                             
