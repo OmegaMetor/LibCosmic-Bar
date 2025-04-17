@@ -15,4 +15,4 @@ zbus = "5.5.0"
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic"
 default-features = false
-features = ["applet-token"]
+features = [ "applet-token", "wgpu" ]
