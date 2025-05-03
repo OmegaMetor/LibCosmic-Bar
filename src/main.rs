@@ -16,8 +16,10 @@ use cosmic::iced_widget::{column, row, text_input};
 use cosmic::iced_winit::commands::layer_surface::destroy_layer_surface;
 use cosmic::iced_winit::commands::subsurface::KeyboardInteractivity;
 use cosmic::widget::Space;
-use hyprland::prelude::*;
+use hyprland::dispatch::DispatchType;
+use hyprland::dispatch::{Dispatch, WorkspaceIdentifierWithSpecial};
 use hyprland::shared::HyprData;
+use hyprland::{dispatch, prelude::*};
 use iced::border::radius;
 use iced::platform_specific::shell::commands::layer_surface::get_layer_surface;
 use iced::platform_specific::shell::commands::overlap_notify::overlap_notify;
@@ -33,10 +35,34 @@ pub struct State {
     bar_id: window::Id,
     launcher_window: Option<window::Id>,
     launcher_input: String,
+    launcher_results: Vec<String>,
 }
 
 pub struct Shell {
     state: State,
+}
+
+/// This enum is for identifying workspaces that also includes the special workspace
+#[derive(Debug, Clone)]
+pub enum WorkspaceIdentifier {
+    /// The workspace Id
+    Id(i32),
+    /// The workspace relative to the current workspace
+    Relative(i32),
+    /// The workspace on the monitor relative to the current workspace
+    RelativeMonitor(i32),
+    /// The workspace on the monitor relative to the current workspace, including empty workspaces
+    RelativeMonitorIncludingEmpty(i32),
+    /// The open workspace relative to the current workspace
+    RelativeOpen(i32),
+    /// The previous Workspace
+    Previous,
+    /// The first available empty workspace
+    Empty,
+    /// The name of the workspace
+    Name(String),
+    /// The special workspace
+    Special(Option<String>),
 }
 
 /// Messages are how your logic mutates the app state and GUI
@@ -47,7 +73,7 @@ pub enum ShellMessage {
     OpenBlueman,
     HyprlandEvent(hyprland::event_listener::Event),
     HyprlandError,
-    SetWorkspace(i32),
+    SetWorkspace(WorkspaceIdentifier),
     ShortcutError(String),
     ShortcutActivated(String),
     ShortcutsSetup,
@@ -87,6 +113,7 @@ impl Shell {
                     bar_id: id,
                     launcher_window: None,
                     launcher_input: "".to_string(),
+                    launcher_results: Vec::new(),
                 },
             },
             Task::batch(vec![layer_shell_task, overlap_notify(id, true)]),
@@ -103,9 +130,12 @@ impl Shell {
 
                         workspaces.sort_by_key(|workspace| workspace.id);
                         workspaces.into_iter().map(|workspace| {
-                            iced::widget::button(text(workspace.id))
+                            let name = workspace.name;
+                            iced::widget::button(text(name.clone()))
                                 .on_press_maybe(if workspace.id != self.state.active_workspace {
-                                    Some(ShellMessage::SetWorkspace(workspace.id))
+                                    Some(ShellMessage::SetWorkspace(WorkspaceIdentifier::Name(
+                                        name,
+                                    )))
                                 } else {
                                     None
                                 })
@@ -138,6 +168,12 @@ impl Shell {
             .padding(Padding::from([0, 0]))
             .into()
         } else {
+            self.view_launcher()
+        }
+    }
+
+    fn view_launcher(&self) -> Element<'_, ShellMessage> {
+        container(
             row![
                 Space::with_width(Length::FillPortion(1)),
                 column(vec![
@@ -151,7 +187,7 @@ impl Shell {
                             border: Border {
                                 color: theme.extended_palette().background.base.color.into(),
                                 width: 0.0,
-                                radius: radius(15)
+                                radius: radius(20)
                             },
                             icon: theme.extended_palette().primary.base.color.into(),
                             placeholder: theme.extended_palette().primary.weak.color.into(),
@@ -160,80 +196,72 @@ impl Shell {
                         })
                         .padding(15)
                         .into(),
-                    if self.state.launcher_input.len() != 0 {
-                        container(
-                            iced::widget::column({
-                                let mut items = vec![];
-                                let show_count = std::cmp::min(self.state.launcher_input.len(), 5);
-                                if show_count > 0 {
-                                    items.push(
-                                        container(
-                                            iced::widget::column({
-                                                let mut items = vec![];
-                                                for i in 0..show_count {
-                                                    let c = container(text!("Hello {i}").size(20))
-                                                        .center_y(Length::Fill)
-                                                        .padding(10)
-                                                        .width(Length::Fill)
-                                                        .style(|theme: &Theme| container::Style {
-                                                            border: Border {
-                                                                radius: radius(20),
-                                                                ..Default::default()
-                                                            },
-                                                            background: Some(
-                                                                theme
-                                                                    .extended_palette()
-                                                                    .background
-                                                                    .weak
-                                                                    .color
-                                                                    .into(),
-                                                            ),
+                    iced::widget::column({
+                        let mut items = vec![];
+                        let show_count = std::cmp::min(self.state.launcher_results.len(), 5);
+                        if show_count > 0 {
+                            items.push(
+                                container(
+                                    iced::widget::column({
+                                        let mut items = vec![];
+                                        for i in 0..show_count {
+                                            items.push(
+                                                container(text(&self.state.launcher_results[i]).size(20).wrapping(text::Wrapping::WordOrGlyph))
+                                                    .center_y(Length::Fill)
+                                                    .padding(10)
+                                                    .width(Length::Fill)
+                                                    .style(|theme: &Theme| container::Style {
+                                                        border: Border {
+                                                            radius: radius(20),
+                                                            width: 0.0,
                                                             ..Default::default()
-                                                        });
-                                                    items.push(c.into())
-                                                }
-                                                items
-                                            })
-                                            .spacing(5),
-                                        )
-                                        .style(|theme: &Theme| container::Style {
-                                            background: Some(
-                                                theme
-                                                    .extended_palette()
-                                                    .background
-                                                    .strong
-                                                    .color
+                                                        },
+                                                        background: Some(
+                                                            theme
+                                                                .extended_palette()
+                                                                .background
+                                                                .weak
+                                                                .color
+                                                                .into(),
+                                                        ),
+                                                        ..Default::default()
+                                                    })
                                                     .into(),
-                                            ),
-                                            border: Border {
-                                                radius: radius(20),
-                                                ..Default::default()
-                                            },
-                                            ..Default::default()
-                                        })
-                                        .height(Length::FillPortion(show_count as u16))
-                                        .into(),
-                                    )
-                                }
+                                            )
+                                        }
+                                        items
+                                    })
+                                    .spacing(8),
+                                )
+                                .padding(4)
+                                .style(|theme: &Theme| container::Style {
+                                    background: Some(
+                                        theme.extended_palette().background.strong.color.into(),
+                                    ),
+                                    border: Border {
+                                        radius: radius(20),
+                                        width: 0.0,
+                                        ..Default::default()
+                                    },
+                                    ..Default::default()
+                                })
+                                .clip(true)
+                                .height(Length::FillPortion(show_count as u16))
+                                .into(),
+                            )
+                        }
 
-                                if show_count < 5 {
-                                    items.push(
-                                        Space::with_height(Length::FillPortion(
-                                            5 - show_count as u16,
-                                        ))
-                                        .into(),
-                                    )
-                                }
-                                items
-                            })
-                            .width(Length::Fill),
-                        )
-                        .height(Length::FillPortion(1))
-                        .width(Length::FillPortion(1))
-                        .into()
-                    } else {
-                        Space::with_height(Length::FillPortion(1)).into()
-                    },
+                        if show_count < 5 {
+                            items.push(
+                                Space::with_height(Length::FillPortion(5 - show_count as u16))
+                                    .into(),
+                            )
+                        }
+                        items
+                    })
+                    .width(Length::FillPortion(1))
+                    .height(Length::FillPortion(1))
+                    .into(),
                     Space::with_height(Length::FillPortion(1)).into()
                 ])
                 .spacing(5)
@@ -242,9 +270,17 @@ impl Shell {
                 Space::with_width(Length::FillPortion(1))
             ]
             .width(Length::Fill)
-            .height(Length::Fill)
-            .into()
-        }
+            .height(Length::Fill),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(|theme: &Theme| container::Style {
+            background: Some(
+                theme.extended_palette().background.strong.color.scale_alpha(0.25).into(),
+            ),
+            ..Default::default()
+        })
+        .into()
     }
 
     pub fn update(&mut self, message: ShellMessage) -> Task<ShellMessage> {
@@ -259,9 +295,7 @@ impl Shell {
                 Task::none()
             }
             ShellMessage::OpenBlueman => {
-                let _ = std::process::Command::new("hyprctl")
-                    .arg("dispatch exec blueman-manager")
-                    .spawn();
+                let _ = dispatch!(Exec, "blueman-manager");
                 return if let Some(_) = self.state.launcher_window {
                     Task::done(ShellMessage::ToggleLauncher)
                 } else {
@@ -280,11 +314,19 @@ impl Shell {
                 }
                 _ => Task::none(),
             },
-            ShellMessage::SetWorkspace(id) => {
+            ShellMessage::SetWorkspace(workspace_identifier) => {
                 use hyprland::dispatch;
                 use hyprland::dispatch::Dispatch;
                 use hyprland::dispatch::DispatchType;
-                let _ = dispatch!(Workspace, dispatch::WorkspaceIdentifierWithSpecial::Id(id));
+                let _ = dispatch!(Workspace, {
+                    match &workspace_identifier {
+                        WorkspaceIdentifier::Id(id) => WorkspaceIdentifierWithSpecial::Id(*id),
+                        WorkspaceIdentifier::Name(name) => {
+                            WorkspaceIdentifierWithSpecial::Name(name.as_str())
+                        }
+                        _ => WorkspaceIdentifierWithSpecial::Empty,
+                    }
+                });
                 return if let Some(_) = self.state.launcher_window {
                     Task::done(ShellMessage::ToggleLauncher)
                 } else {
@@ -306,7 +348,6 @@ impl Shell {
             ShellMessage::ToggleLauncher => {
                 match self.state.launcher_window {
                     Some(id) => {
-                        // TODO: Cleanup and stuff
                         self.state.launcher_window = None;
                         return destroy_layer_surface(id);
                     }
@@ -320,11 +361,12 @@ impl Shell {
                             keyboard_interactivity: KeyboardInteractivity::Exclusive,
                             pointer_interactivity: true,
                             anchor: Anchor::all(),
+                            exclusive_zone: -1,
                             ..Default::default()
                         });
-
                         self.state.launcher_window = Some(id);
                         self.state.launcher_input = "".to_string();
+                        self.state.launcher_results.clear();
                         layer_shell_task
                     }
                 }
@@ -343,6 +385,15 @@ impl Shell {
             },
             ShellMessage::LauncherInput(input) => {
                 self.state.launcher_input = input;
+
+                // TODO: Get results for things lol
+
+                // so, how do we structure this...
+
+                self.state.launcher_results.clear();
+                for i in 0..std::cmp::min(self.state.launcher_input.len(), 5) {
+                    self.state.launcher_results.push(format!("Hello {i}"))
+                }
                 Task::none()
             }
             ShellMessage::LayerFocused(layer_id) => match self.state.launcher_window {
@@ -436,5 +487,6 @@ fn main() -> iced::Result {
             background_color: Color::TRANSPARENT,
             ..default(theme)
         })
+        .antialiasing(true)
         .run_with(Shell::new)
 }

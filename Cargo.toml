@@ -7,9 +7,7 @@ edition = "2024"
 ashpd = { version = "0.11.0", features = ["wayland"]}
 catppuccin = "2.5.1"
 chrono = "0.4.39"
-freedesktop-icons = "0.3.1"
 hyprland = "0.4.0-beta.2"
-open = "5.3.2"
 zbus = "5.5.0"
 
 [dependencies.libcosmic]
