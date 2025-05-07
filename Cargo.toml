@@ -1,14 +1,16 @@
 [package]
-name = "testing-libcosmic"
+name = "my-shell"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 ashpd = { version = "0.11.0", features = ["wayland"]}
-catppuccin = "2.5.1"
 chrono = "0.4.39"
 hyprland = "0.4.0-beta.2"
-zbus = "5.5.0"
+regex = "1.11.1"
+rust-fuzzy-search = "0.1.1"
+walkdir = "2.5.0"
+xdg-desktop-entries = "0.1.0"
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic"
