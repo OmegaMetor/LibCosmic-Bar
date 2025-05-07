@@ -12,14 +12,9 @@ mod bar;
 mod launcher;
 mod window;
 
-#[derive(Debug)]
-pub struct State {
+pub struct Shell {
     launcher: launcher::Launcher,
     bar: bar::Bar,
-}
-
-pub struct Shell {
-    state: State,
 }
 
 // Messages are how your logic mutates the app state and GUI
@@ -39,10 +34,8 @@ impl Shell {
 
         (
             Self {
-                state: State {
-                    bar: bar_window,
-                    launcher: launcher_window,
-                },
+                bar: bar_window,
+                launcher: launcher_window,
             },
             Task::batch(vec![
                 launcher_init_task.map(|e| ShellMessage::LauncherMessage(e)),
@@ -53,19 +46,17 @@ impl Shell {
 
     pub fn view(&self, id: Id) -> Element<'_, ShellMessage> {
         if self
-            .state
             .launcher
             .window
             .is_some_and(|window_id| window_id == id)
         {
             return self
-                .state
                 .launcher
                 .view()
                 .map(|e| ShellMessage::LauncherMessage(e));
         }
-        if id == self.state.bar.id {
-            return self.state.bar.view().map(|e| ShellMessage::BarMessage(e));
+        if id == self.bar.id {
+            return self.bar.view().map(|e| ShellMessage::BarMessage(e));
         } else {
             Space::new(0, 0).into()
         }
@@ -95,7 +86,7 @@ impl Shell {
                 if let launcher::Message::ShellMessage(shell_message) = message {
                     self.update(dbg!(*shell_message.clone()))
                 } else {
-                    self.state
+                    self
                         .launcher
                         .update(message)
                         .map(|e| ShellMessage::LauncherMessage(e))
@@ -105,7 +96,7 @@ impl Shell {
                 if let bar::Message::ShellMessage(shell_message) = message {
                     self.update(dbg!(*shell_message.clone()))
                 } else {
-                    self.state
+                    self
                         .bar
                         .update(message)
                         .map(|e| ShellMessage::BarMessage(e))
@@ -116,14 +107,15 @@ impl Shell {
 
     pub fn subscription(&self) -> iced::Subscription<ShellMessage> {
         iced::Subscription::batch(vec![
-            self.state
+            self
                 .launcher
                 .subscription()
                 .map(|message| ShellMessage::LauncherMessage(message)),
-            self.state
+            self
                 .bar
                 .subscription()
                 .map(|message| ShellMessage::BarMessage(message)),
+                
             Subscription::run(|| {
                 iced::stream::channel(10, async |mut output| {
                     let proxy = match ashpd::desktop::global_shortcuts::GlobalShortcuts::new().await
