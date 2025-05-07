@@ -1,23 +1,13 @@
-use std::path::{Path, PathBuf};
-
+use bar::{Bar, WorkspaceIdentifier};
 use cosmic::cctk;
 use cosmic::cctk::sctk::shell::wlr_layer::Anchor;
 use cosmic::iced::alignment::Vertical;
-use cosmic::iced::event::Status;
 use cosmic::iced::event::wayland::LayerEvent;
 use cosmic::iced::futures::{SinkExt, StreamExt};
-use cosmic::iced::keyboard::Key;
-use cosmic::iced::keyboard::key::Named;
-use cosmic::iced::{self, Alignment, Color, Subscription, mouse};
-use cosmic::iced_core::SmolStr;
-use cosmic::iced_runtime::platform_specific::wayland::layer_surface::{
-    IcedOutput, SctkLayerSurfaceSettings,
-};
+use cosmic::iced::{self, Color, Subscription};
+use cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedOutput;
 use cosmic::iced_runtime::{Appearance, default};
-use cosmic::iced_widget::text_input::Style;
-use cosmic::iced_widget::{column, row, text_input};
-use cosmic::iced_winit::commands::layer_surface::destroy_layer_surface;
-use cosmic::iced_winit::commands::subsurface::KeyboardInteractivity;
+use cosmic::iced_widget::{row, text_input};
 use cosmic::widget::Space;
 use hyprland::dispatch::DispatchType;
 use hyprland::dispatch::{Dispatch, WorkspaceIdentifierWithSpecial};
@@ -27,312 +17,27 @@ use iced::border::radius;
 use iced::platform_specific::shell::commands::layer_surface::get_layer_surface;
 use iced::platform_specific::shell::commands::overlap_notify::overlap_notify;
 use iced::widget::{container, text};
-use iced::{Border, Element, Event, Length, Padding, Task, Theme, event, keyboard, time, window};
-use xdg_desktop_entries::{ApplicationDesktopEntry, DesktopEntryType};
+use iced::{Border, Element, Event, Length, Padding, Task, Theme, event, time, window};
+use launcher::{Launcher};
+use window_trait::Window;
 
 use chrono::Local;
-use rust_fuzzy_search::fuzzy_compare;
-use walkdir::WalkDir;
 
-trait Window {
-    type Message;
-
-    fn new() -> (Self, Task<Self::Message>)
-    where
-        Self: Sized;
-    fn view(self: &Self) -> Element<'_, Self::Message>;
-    fn update(self: &Self, message: Self::Message) -> Task<Self::Message>;
-    fn subscription(self: &Self) -> iced::Subscription<Self::Message>;
-}
-
-#[derive(Debug)]
-pub struct LauncherWindow {
-    launcher_window: Option<window::Id>,
-    launcher_input: String,
-    launcher_results: Vec<ApplicationDesktopEntry>, // TODO: Change this to be a generic action, so i can do math and stuff too
-    launcher_apps: Vec<ApplicationDesktopEntry>,
-    launcher_selection: usize,
-}
-
-#[derive(Debug, Clone)]
-pub enum LauncherMessage {
-    LauncherInput(String),
-    LauncherSubmit,
-}
-
-impl Window for LauncherWindow {
-    type Message = LauncherMessage;
-
-    fn new() -> (Self, Task<Self::Message>)
-    where
-        Self: Sized,
-    {
-        (
-            Self {
-                launcher_window: None,
-                launcher_input: "".to_string(),
-                launcher_results: Vec::new(),
-                launcher_apps: Vec::new(),
-                launcher_selection: 0,
-            },
-            Task::none(),
-        )
-    }
-
-    fn view(self: &Self) -> Element<'_, Self::Message> {
-        container(
-            row![
-                Space::with_width(Length::FillPortion(1)),
-                column(vec![
-                    Space::with_height(Length::FillPortion(1)).into(),
-                    text_input("", &self.launcher_input)
-                        .on_input(LauncherMessage::LauncherInput)
-                        .on_submit_maybe({
-                            if self.launcher_results.len() != 0 {
-                                Some(LauncherMessage::LauncherSubmit)
-                            } else {
-                                None
-                            }
-                        })
-                        .id("launcher")
-                        .size(30)
-                        .style(|theme: &Theme, _status| Style {
-                            background: theme.extended_palette().background.weak.color.into(),
-                            border: Border {
-                                color: theme.extended_palette().background.base.color.into(),
-                                width: 0.0,
-                                radius: radius(20)
-                            },
-                            icon: theme.extended_palette().primary.base.color.into(),
-                            placeholder: theme.extended_palette().primary.weak.color.into(),
-                            value: Color::BLACK,
-                            selection: theme.extended_palette().secondary.base.color.into(),
-                        })
-                        .padding(15)
-                        .into(),
-                    iced::widget::column({
-                        let mut items = vec![];
-                        let show_count = self.launcher_results.len();
-                        if show_count > 0 {
-                            items.push(
-                                container(
-                                    iced::widget::column({
-                                        let mut items = vec![];
-                                        for i in 0..show_count {
-                                            items.push({
-                                                let mut item = container(
-                                                    text(&self.launcher_results[i].name)
-                                                        .size(20)
-                                                        .wrapping(text::Wrapping::WordOrGlyph),
-                                                )
-                                                .center_y(Length::Fill)
-                                                .padding(10)
-                                                .width(Length::Fill)
-                                                .style(|theme: &Theme| container::Style {
-                                                    border: Border {
-                                                        radius: radius(20),
-                                                        width: 0.0,
-                                                        ..Default::default()
-                                                    },
-                                                    background: Some(
-                                                        theme
-                                                            .extended_palette()
-                                                            .background
-                                                            .weak
-                                                            .color
-                                                            .into(),
-                                                    ),
-                                                    ..Default::default()
-                                                });
-                                                if i == self.launcher_selection {
-                                                    item = item.style(|theme: &Theme| {
-                                                        container::Style {
-                                                            border: Border {
-                                                                radius: radius(20),
-                                                                width: 0.0,
-                                                                ..Default::default()
-                                                            },
-                                                            background: Some(
-                                                                theme
-                                                                    .extended_palette()
-                                                                    .primary
-                                                                    .base
-                                                                    .color
-                                                                    .into(),
-                                                            ),
-                                                            ..Default::default()
-                                                        }
-                                                    });
-                                                }
-                                                item.into()
-                                            })
-                                        }
-                                        items
-                                    })
-                                    .spacing(8),
-                                )
-                                .padding(4)
-                                .style(|theme: &Theme| container::Style {
-                                    background: Some(
-                                        theme.extended_palette().background.strong.color.into(),
-                                    ),
-                                    border: Border {
-                                        radius: radius(20),
-                                        width: 0.0,
-                                        ..Default::default()
-                                    },
-                                    ..Default::default()
-                                })
-                                .clip(true)
-                                .height(Length::FillPortion(show_count as u16))
-                                .into(),
-                            )
-                        }
-
-                        if show_count < 5 {
-                            items.push(
-                                Space::with_height(Length::FillPortion(5 - show_count as u16))
-                                    .into(),
-                            )
-                        }
-                        items
-                    })
-                    .width(Length::FillPortion(1))
-                    .height(Length::FillPortion(1))
-                    .into(),
-                    Space::with_height(Length::FillPortion(1)).into()
-                ])
-                .spacing(5)
-                .width(Length::FillPortion(1))
-                .align_x(Alignment::Center),
-                Space::with_width(Length::FillPortion(1))
-            ]
-            .width(Length::Fill)
-            .height(Length::Fill),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .style(|theme: &Theme| container::Style {
-            background: Some(
-                theme
-                    .extended_palette()
-                    .background
-                    .strong
-                    .color
-                    .scale_alpha(0.25)
-                    .into(),
-            ),
-            ..Default::default()
-        })
-        .into()
-    }
-
-    fn update(self: &Self, message: Self::Message) -> Task<Self::Message> {
-        return match message {
-            LauncherMessage::LauncherInput(input) => {
-                self.launcher_input = input;
-
-                let mut searched_apps: Vec<(&ApplicationDesktopEntry, f32)> = self
-                    .launcher_apps
-                    .iter()
-                    .filter_map(|app| {
-                        let similarity = fuzzy_compare(
-                            app.name.to_lowercase().as_str(),
-                            self.launcher_input.to_lowercase().as_str(),
-                        );
-                        if similarity == 0.0 {
-                            return None;
-                        }
-
-                        Some((app, similarity))
-                    })
-                    .collect();
-
-                searched_apps.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
-                self.launcher_results.clear();
-                if self.state.launcher_input.len() != 0 {
-                    let count = std::cmp::min(searched_apps.len(), 5);
-                    self.state.launcher_selection =
-                        std::cmp::min(self.state.launcher_selection, count);
-
-                    for i in 0..count {
-                        self.state.launcher_results.push(searched_apps[i].0.clone())
-                    }
-                }
-
-                Task::none()
-            }
-            LauncherMessage::LauncherSubmit => {
-                dbg!(&self.state.launcher_results[self.state.launcher_selection]);
-                if let Some(command) =
-                    &self.state.launcher_results[self.state.launcher_selection].exec
-                {
-                    let re = regex::Regex::new("%(?<code>.)").unwrap();
-
-                    let replaced_command = re.replace_all(command, |captures: &regex::Captures| {
-                        let ch = &captures["code"];
-                        match ch {
-                            "f" => "",  // TODO: Implement somehow?
-                            "F" => "",  // TODO: Implement somehow?
-                            "u" => "",  // TODO: Implement somehow?
-                            "U" => "",  // TODO: Implement somehow?
-                            "i" => "",  // TODO: Implement somehow?
-                            "c" => "",  // TODO: Implement somehow?
-                            "k" => "",  // TODO: Implement somehow?
-                            "%" => "%", // Replace %% with %.
-                            _ => "",
-                        }
-                    });
-                    let _ = dispatch!(Exec, &replaced_command);
-                    Task::done(ToggleLauncher)
-                } else {
-                    Task::none()
-                }
-            }
-        };
-    }
-
-    fn subscription(self: &Self) -> iced::Subscription<Self::Message> {
-        Subscription::none()
-    }
-}
+mod bar;
+mod launcher;
+mod window_trait;
 
 #[derive(Debug)]
 pub struct State {
     count: u32,
     active_workspace: i32,
     bar_id: window::Id,
-    launcher_window: Option<window::Id>,
-    launcher_window_t: LauncherWindow
+    launcher: launcher::Launcher,
+    bar: bar::Bar,
 }
 
 pub struct Shell {
     state: State,
-}
-
-// This enum is for identifying workspaces that also includes the special workspace
-// Because hyprland-rs' doesn't work because of lifetime stuff
-#[derive(Debug, Clone)]
-pub enum WorkspaceIdentifier {
-    // The workspace Id
-    Id(i32),
-    // The workspace relative to the current workspace
-    Relative(i32),
-    // The workspace on the monitor relative to the current workspace
-    RelativeMonitor(i32),
-    // The workspace on the monitor relative to the current workspace, including empty workspaces
-    RelativeMonitorIncludingEmpty(i32),
-    // The open workspace relative to the current workspace
-    RelativeOpen(i32),
-    // The previous Workspace
-    Previous,
-    // The first available empty workspace
-    Empty,
-    // The name of the workspace
-    Name(String),
-    // The special workspace
-    Special(Option<String>),
 }
 
 // Messages are how your logic mutates the app state and GUI
@@ -347,11 +52,9 @@ pub enum ShellMessage {
     ShortcutError(String),
     ShortcutActivated(String),
     ShortcutsSetup,
-    ToggleLauncher,
-    Escape,
-    ArrowKey(Key<SmolStr>),
     LayerFocused(window::Id),
-    LauncherMessage(LauncherMessage),
+    LauncherMessage(launcher::Message),
+    BarMessage(bar::Message),
 }
 
 impl Shell {
@@ -373,7 +76,8 @@ impl Shell {
             },
         );
 
-        let (launcher_window, task) = LauncherWindow::new();
+        let (launcher_window, launcher_init_task) = Launcher::new();
+        let (bar_window, bar_init_task) = Bar::new();
 
         (
             Self {
@@ -383,18 +87,31 @@ impl Shell {
                         .expect("Failed to get hyprland workspace")
                         .id,
                     bar_id: id,
-                    launcher_window: None,
-                    launcher_window_t: launcher_window
+                    bar: bar_window,
+                    launcher: launcher_window,
                 },
             },
-            Task::batch(vec![layer_shell_task, overlap_notify(id, true), task.map(|e| ShellMessage::LauncherMessage(e))]),
+            Task::batch(vec![
+                layer_shell_task,
+                overlap_notify(id, true),
+                launcher_init_task.map(|e| ShellMessage::LauncherMessage(e)),
+                bar_init_task.map(|e| ShellMessage::BarMessage(e)),
+            ]),
         )
     }
 
     pub fn view(&self, id: window::Id) -> Element<'_, ShellMessage> {
-
-        if self.state.launcher_window_t.launcher_window.is_some_and(|window_id| window_id == id) {
-            return self.state.launcher_window_t.view().map(|e| ShellMessage::LauncherMessage(e));
+        if self
+            .state
+            .launcher
+            .window
+            .is_some_and(|window_id| window_id == id)
+        {
+            return self
+                .state
+                .launcher
+                .view()
+                .map(|e| ShellMessage::LauncherMessage(e));
         }
 
         if id == self.state.bar_id {
@@ -444,12 +161,8 @@ impl Shell {
             .padding(Padding::from([0, 0]))
             .into()
         } else {
-            self.view_launcher()
+            Space::new(0, 0).into()
         }
-    }
-
-    fn view_launcher(&self) -> Element<'_, ShellMessage> {
-        
     }
 
     pub fn update(&mut self, message: ShellMessage) -> Task<ShellMessage> {
@@ -462,21 +175,13 @@ impl Shell {
             }
             OpenBlueman => {
                 let _ = dispatch!(Exec, "blueman-manager");
-                return if let Some(_) = self.state.launcher_window {
-                    Task::done(ToggleLauncher)
-                } else {
-                    Task::none()
-                };
+                Task::none()
             }
             HyprlandError => Task::none(),
             HyprlandEvent(event) => match event {
                 hyprland::event_listener::Event::WorkspaceChanged(data) => {
                     self.state.active_workspace = data.id;
-                    return if let Some(_) = self.state.launcher_window {
-                        Task::done(ToggleLauncher)
-                    } else {
-                        Task::none()
-                    };
+                    Task::none()
                 }
                 _ => Task::none(),
             },
@@ -493,11 +198,7 @@ impl Shell {
                         _ => WorkspaceIdentifierWithSpecial::Empty,
                     }
                 });
-                return if let Some(_) = self.state.launcher_window {
-                    Task::done(ToggleLauncher)
-                } else {
-                    Task::none()
-                };
+                Task::none()
             }
             ShortcutActivated(thing) => {
                 match thing.as_str() {
@@ -505,92 +206,11 @@ impl Shell {
                         self.state.count += 1;
                         // Toggle popup
 
-                        return Task::done(ToggleLauncher);
+                        return Task::done(LauncherMessage(launcher::Message::Open));
                     }
                     _ => println!("Shouldn't happen! Shortcut ID {} is not handled!", thing), // TODO: Enums and hashmaps? We'll see!
                 }
                 Task::none()
-            }
-            ToggleLauncher => {
-                match self.state.launcher_window {
-                    Some(id) => {
-                        self.state.launcher_window = None;
-                        return destroy_layer_surface(id);
-                    }
-                    None => {
-                        let id = window::Id::unique();
-
-                        let layer_shell_task = get_layer_surface(SctkLayerSurfaceSettings {
-                            id,
-                            layer: cctk::sctk::shell::wlr_layer::Layer::Top,
-                            output: IcedOutput::Active,
-                            keyboard_interactivity: KeyboardInteractivity::Exclusive,
-                            pointer_interactivity: true,
-                            anchor: Anchor::all(),
-                            exclusive_zone: -1,
-                            ..Default::default()
-                        });
-                        self.state.launcher_window = Some(id);
-                        self.state.launcher_input = "".to_string();
-                        self.state.launcher_results.clear();
-                        self.state.launcher_apps.clear();
-                        self.state.launcher_selection = 0;
-
-                        // Fill launcher appps vec
-                        // hm
-
-                        self.state.launcher_apps.extend(
-                            std::iter::once(match std::env::var("XDG_DATA_HOME") {
-                                Ok(dir) => PathBuf::from(dir),
-                                Err(_) => {
-                                    let home_dir = std::env::var("HOME").unwrap();
-                                    Path::new(&home_dir).join(".local").join("share")
-                                }
-                            })
-                            .chain(
-                                std::env::var("XDG_DATA_DIRS")
-                                    .unwrap_or("/usr/local/share/:/usr/share/".into())
-                                    .split(':')
-                                    .map(|path| PathBuf::from(path)),
-                            )
-                            .map(|path| path.join("applications"))
-                            .filter(|path| path.exists())
-                            .map(|path| {
-                                WalkDir::new(path)
-                                    .follow_links(true)
-                                    .into_iter()
-                                    .filter_map(|entry| entry.ok())
-                                    .filter(|entry| {
-                                        entry.file_type().is_file()
-                                            && entry
-                                                .path()
-                                                .extension()
-                                                .is_some_and(|e| e == "desktop")
-                                    })
-                            })
-                            .flatten()
-                            .map(|entry| xdg_desktop_entries::parse_desktop_entry(entry.path()))
-                            .filter_map(|value| match value {
-                                Ok(entry) => {
-                                    if let DesktopEntryType::Application(app_entry) = entry {
-                                        if app_entry.no_display.is_some_and(|b| b) {
-                                            return None;
-                                        }
-                                        if app_entry.hidden.is_some_and(|b| b) {
-                                            return None;
-                                        }
-                                        // TODO: Handle OnlyShowIn, NotShowIn, TryExec
-                                        Some(app_entry)
-                                    } else {
-                                        None
-                                    }
-                                }
-                                Err(_) => None,
-                            }),
-                        );
-                        layer_shell_task
-                    }
-                }
             }
             ShortcutError(error) => {
                 dbg!(error);
@@ -600,56 +220,44 @@ impl Shell {
                 dbg!("Shortcuts Setup");
                 Task::none()
             }
-            Escape => match self.state.launcher_window {
-                Some(_) => Task::done(ToggleLauncher),
-                None => Task::none(),
-            },
-            LayerFocused(layer_id) => match self.state.launcher_window {
+            LayerFocused(layer_id) => match self.state.launcher.window {
                 Some(id) if id == layer_id => text_input::focus("launcher"),
                 _ => Task::none(),
             },
-            ArrowKey(key) => {
-                if self.state.launcher_window.is_none() || self.state.launcher_results.len() == 0 {
-                    return Task::none();
-                }
-
-                self.state.launcher_selection = (self.state.launcher_selection as i32
-                    + match key {
-                        Key::Named(Named::ArrowUp) => -1,
-                        Key::Named(Named::ArrowDown) => 1,
-                        _ => 0,
-                    })
-                .clamp(0, self.state.launcher_results.len() as i32 - 1)
-                    as usize;
-
-                Task::none()
-            }
             LauncherMessage(message) => {
-                self.state.launcher_window_t.update(message).map(|e| ShellMessage::LauncherMessage(e))
+                if let launcher::Message::ShellMessage(shell_message) = message {
+                    self.update(dbg!(*shell_message.clone()))
+                } else {
+                    self.state
+                        .launcher
+                        .update(message)
+                        .map(|e| ShellMessage::LauncherMessage(e))
+                }
             }
+            BarMessage(message) => {
+                if let bar::Message::ShellMessage(shell_message) = message {
+                    self.update(dbg!(*shell_message.clone()))
+                } else {
+                    self.state
+                        .bar
+                        .update(message)
+                        .map(|e| ShellMessage::BarMessage(e))
+                }
+            },
         }
     }
 
     pub fn subscription(&self) -> iced::Subscription<ShellMessage> {
         iced::Subscription::batch({
             let subscriptions = vec![
-                self.state.launcher_window_t.subscription().map(|message| ShellMessage::LauncherMessage(message)),
-                event::listen_with(|event, status, _| match event {
+                self.state
+                    .launcher
+                    .subscription()
+                    .map(|message| ShellMessage::LauncherMessage(message)),
+                event::listen_with(|event, _, _| match event {
                     Event::PlatformSpecific(event::PlatformSpecific::Wayland(
                         event::wayland::Event::Layer(LayerEvent::Focused, _, id),
                     )) => Some(ShellMessage::LayerFocused(id)),
-                    Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => match key {
-                        Key::Named(Named::Escape) => Some(ShellMessage::Escape),
-                        Key::Named(Named::ArrowUp) | Key::Named(Named::ArrowDown) => {
-                            Some(ShellMessage::ArrowKey(key))
-                        }
-                        _ => None,
-                    },
-                    Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-                        if status == Status::Ignored =>
-                    {
-                        Some(ShellMessage::Escape)
-                    }
                     _ => None,
                 }),
                 time::every(std::time::Duration::from_millis(100)).map(ShellMessage::TimeTick),
