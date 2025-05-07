@@ -1,7 +1,4 @@
-use cosmic::iced;
-
-use iced::{Element, Task};
-
+use cosmic::iced::{self, Element, Task};
 
 pub trait Window {
     type Message;

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use cosmic::cctk;
 use cosmic::cctk::sctk::shell::wlr_layer::Anchor;
+use cosmic::iced::event::wayland::LayerEvent;
 use cosmic::iced::event::Status;
 use cosmic::iced::keyboard::Key;
 use cosmic::iced::keyboard::key::Named;
@@ -26,7 +27,7 @@ use xdg_desktop_entries::{ApplicationDesktopEntry, DesktopEntryType};
 use rust_fuzzy_search::fuzzy_compare;
 
 use crate::ShellMessage;
-use crate::window_trait::Window;
+use crate::window::Window;
 
 #[derive(Debug)]
 pub struct Launcher {
@@ -45,14 +46,14 @@ pub enum Message {
     Close,
     SelectionUp,
     SelectionDown,
+    LayerFocused(window::Id),
     ShellMessage(Box<ShellMessage>),
 }
 
 impl Window for Launcher {
     type Message = Message;
 
-    fn new() -> (Self, Task<Self::Message>)
-    {
+    fn new() -> (Self, Task<Self::Message>) {
         (
             Self {
                 window: None,
@@ -360,21 +361,24 @@ impl Window for Launcher {
                 }
 
                 self.selected_item = (self.selected_item as i32 - 1)
-                .clamp(0, self.results.len() as i32 - 1)
-                as usize;
-                
+                    .clamp(0, self.results.len() as i32 - 1)
+                    as usize;
+
                 Task::none()
             }
             SelectionDown => {
                 if self.window.is_none() || self.results.len() == 0 {
                     return Task::none();
                 }
-                
+
                 self.selected_item = (self.selected_item + 1).clamp(0, self.results.len() - 1);
 
                 Task::none()
             }
-
+            LayerFocused(layer_id) => match self.window {
+                Some(id) if id == layer_id => text_input::focus("launcher"),
+                _ => Task::none(),
+            },
             ShellMessage(_) => Task::none(),
         };
     }
@@ -392,6 +396,9 @@ impl Window for Launcher {
             {
                 Some(Message::Close)
             }
+            Event::PlatformSpecific(event::PlatformSpecific::Wayland(
+                event::wayland::Event::Layer(LayerEvent::Focused, _, id),
+            )) => Some(Message::LayerFocused(id)),
             _ => None,
         })
     }

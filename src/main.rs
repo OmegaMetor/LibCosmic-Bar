@@ -1,37 +1,19 @@
-use bar::{Bar, WorkspaceIdentifier};
-use cosmic::cctk;
-use cosmic::cctk::sctk::shell::wlr_layer::Anchor;
-use cosmic::iced::alignment::Vertical;
-use cosmic::iced::event::wayland::LayerEvent;
+use bar::Bar;
 use cosmic::iced::futures::{SinkExt, StreamExt};
 use cosmic::iced::{self, Color, Subscription};
-use cosmic::iced_runtime::platform_specific::wayland::layer_surface::IcedOutput;
 use cosmic::iced_runtime::{Appearance, default};
-use cosmic::iced_widget::{row, text_input};
 use cosmic::widget::Space;
-use hyprland::dispatch::DispatchType;
-use hyprland::dispatch::{Dispatch, WorkspaceIdentifierWithSpecial};
-use hyprland::shared::HyprData;
-use hyprland::{dispatch, prelude::*};
-use iced::border::radius;
-use iced::platform_specific::shell::commands::layer_surface::get_layer_surface;
-use iced::platform_specific::shell::commands::overlap_notify::overlap_notify;
-use iced::widget::{container, text};
-use iced::{Border, Element, Event, Length, Padding, Task, Theme, event, time, window};
-use launcher::{Launcher};
-use window_trait::Window;
-
-use chrono::Local;
+use iced::window::Id;
+use iced::{Element, Task};
+use launcher::Launcher;
+use window::Window;
 
 mod bar;
 mod launcher;
-mod window_trait;
+mod window;
 
 #[derive(Debug)]
 pub struct State {
-    count: u32,
-    active_workspace: i32,
-    bar_id: window::Id,
     launcher: launcher::Launcher,
     bar: bar::Bar,
 }
@@ -43,64 +25,33 @@ pub struct Shell {
 // Messages are how your logic mutates the app state and GUI
 #[derive(Debug, Clone)]
 pub enum ShellMessage {
-    TimeTick(iced::time::Instant),
-    ButtonPressed,
-    OpenBlueman,
-    HyprlandEvent(hyprland::event_listener::Event),
-    HyprlandError,
-    SetWorkspace(WorkspaceIdentifier),
     ShortcutError(String),
     ShortcutActivated(String),
     ShortcutsSetup,
-    LayerFocused(window::Id),
     LauncherMessage(launcher::Message),
     BarMessage(bar::Message),
 }
 
 impl Shell {
     pub fn new() -> (Self, Task<ShellMessage>) {
-        let id = window::Id::unique();
-
-        let bar_size = Some((None, Some(30)));
-        let exclusive_zone = 30;
-
-        let layer_shell_task = get_layer_surface(
-            iced::platform_specific::runtime::wayland::layer_surface::SctkLayerSurfaceSettings {
-                id,
-                size: bar_size,
-                layer: cctk::sctk::shell::wlr_layer::Layer::Bottom,
-                anchor: Anchor::TOP | Anchor::LEFT | Anchor::RIGHT,
-                exclusive_zone: exclusive_zone,
-                output: IcedOutput::All,
-                ..Default::default()
-            },
-        );
-
         let (launcher_window, launcher_init_task) = Launcher::new();
         let (bar_window, bar_init_task) = Bar::new();
 
         (
             Self {
                 state: State {
-                    count: 0,
-                    active_workspace: hyprland::data::Workspace::get_active()
-                        .expect("Failed to get hyprland workspace")
-                        .id,
-                    bar_id: id,
                     bar: bar_window,
                     launcher: launcher_window,
                 },
             },
             Task::batch(vec![
-                layer_shell_task,
-                overlap_notify(id, true),
                 launcher_init_task.map(|e| ShellMessage::LauncherMessage(e)),
                 bar_init_task.map(|e| ShellMessage::BarMessage(e)),
             ]),
         )
     }
 
-    pub fn view(&self, id: window::Id) -> Element<'_, ShellMessage> {
+    pub fn view(&self, id: Id) -> Element<'_, ShellMessage> {
         if self
             .state
             .launcher
@@ -113,53 +64,8 @@ impl Shell {
                 .view()
                 .map(|e| ShellMessage::LauncherMessage(e));
         }
-
-        if id == self.state.bar_id {
-            container(
-                row![
-                    text(self.state.count),
-                    iced::widget::row({
-                        let mut workspaces = hyprland::data::Workspaces::get().unwrap().to_vec();
-
-                        workspaces.sort_by_key(|workspace| workspace.id);
-                        workspaces.into_iter().map(|workspace| {
-                            let name = workspace.name;
-                            iced::widget::button(text(name.clone()))
-                                .on_press_maybe(if workspace.id != self.state.active_workspace {
-                                    Some(ShellMessage::SetWorkspace(WorkspaceIdentifier::Name(
-                                        name,
-                                    )))
-                                } else {
-                                    None
-                                })
-                                .into()
-                        })
-                    }),
-                    text("Hello, World! I'm a bad status bar!")
-                        .width(Length::Fill)
-                        .center(),
-                    iced::widget::button("").on_press(ShellMessage::OpenBlueman),
-                    text(format!(
-                        "{}",
-                        Local::now().format("%A, %B %e, %Y  %H:%M:%S")
-                    )),
-                ]
-                .align_y(Vertical::Center)
-                .spacing(10)
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .padding(Padding::from([0, 10])),
-            )
-            .style(|theme: &Theme| container::Style {
-                border: Border {
-                    radius: radius(0),
-                    ..Default::default()
-                },
-                background: Some(theme.extended_palette().background.weak.color.into()),
-                ..Default::default()
-            })
-            .padding(Padding::from([0, 0]))
-            .into()
+        if id == self.state.bar.id {
+            return self.state.bar.view().map(|e| ShellMessage::BarMessage(e));
         } else {
             Space::new(0, 0).into()
         }
@@ -168,44 +74,9 @@ impl Shell {
     pub fn update(&mut self, message: ShellMessage) -> Task<ShellMessage> {
         use ShellMessage::*;
         match message {
-            TimeTick(_) => Task::none(),
-            ButtonPressed => {
-                self.state.count += 1;
-                Task::none()
-            }
-            OpenBlueman => {
-                let _ = dispatch!(Exec, "blueman-manager");
-                Task::none()
-            }
-            HyprlandError => Task::none(),
-            HyprlandEvent(event) => match event {
-                hyprland::event_listener::Event::WorkspaceChanged(data) => {
-                    self.state.active_workspace = data.id;
-                    Task::none()
-                }
-                _ => Task::none(),
-            },
-            SetWorkspace(workspace_identifier) => {
-                use hyprland::dispatch;
-                use hyprland::dispatch::Dispatch;
-                use hyprland::dispatch::DispatchType;
-                let _ = dispatch!(Workspace, {
-                    match &workspace_identifier {
-                        WorkspaceIdentifier::Id(id) => WorkspaceIdentifierWithSpecial::Id(*id),
-                        WorkspaceIdentifier::Name(name) => {
-                            WorkspaceIdentifierWithSpecial::Name(name.as_str())
-                        }
-                        _ => WorkspaceIdentifierWithSpecial::Empty,
-                    }
-                });
-                Task::none()
-            }
             ShortcutActivated(thing) => {
                 match thing.as_str() {
                     "ToggleLauncher" => {
-                        self.state.count += 1;
-                        // Toggle popup
-
                         return Task::done(LauncherMessage(launcher::Message::Open));
                     }
                     _ => println!("Shouldn't happen! Shortcut ID {} is not handled!", thing), // TODO: Enums and hashmaps? We'll see!
@@ -220,10 +91,6 @@ impl Shell {
                 dbg!("Shortcuts Setup");
                 Task::none()
             }
-            LayerFocused(layer_id) => match self.state.launcher.window {
-                Some(id) if id == layer_id => text_input::focus("launcher"),
-                _ => Task::none(),
-            },
             LauncherMessage(message) => {
                 if let launcher::Message::ShellMessage(shell_message) = message {
                     self.update(dbg!(*shell_message.clone()))
@@ -243,79 +110,66 @@ impl Shell {
                         .update(message)
                         .map(|e| ShellMessage::BarMessage(e))
                 }
-            },
+            }
         }
     }
 
     pub fn subscription(&self) -> iced::Subscription<ShellMessage> {
-        iced::Subscription::batch({
-            let subscriptions = vec![
-                self.state
-                    .launcher
-                    .subscription()
-                    .map(|message| ShellMessage::LauncherMessage(message)),
-                event::listen_with(|event, _, _| match event {
-                    Event::PlatformSpecific(event::PlatformSpecific::Wayland(
-                        event::wayland::Event::Layer(LayerEvent::Focused, _, id),
-                    )) => Some(ShellMessage::LayerFocused(id)),
-                    _ => None,
-                }),
-                time::every(std::time::Duration::from_millis(100)).map(ShellMessage::TimeTick),
-                Subscription::run(|| hyprland::event_listener::EventStream::new()).map(
-                    |hyprevent| match hyprevent {
-                        Ok(result) => ShellMessage::HyprlandEvent(result),
-                        Err(_) => ShellMessage::HyprlandError,
-                    },
-                ),
-                Subscription::run(|| {
-                    iced::stream::channel(10, async |mut output| {
-                        let proxy =
-                            match ashpd::desktop::global_shortcuts::GlobalShortcuts::new().await {
-                                Ok(proxy) => proxy,
-                                Err(error) => {
-                                    dbg!(error);
-                                    return;
-                                }
-                            };
-
-                        let session = match proxy.create_session().await {
-                            Ok(session) => session,
-                            Err(error) => {
-                                dbg!(error);
-                                return;
-                            }
-                        };
-
-                        let shortcuts = vec![ashpd::desktop::global_shortcuts::NewShortcut::new(
-                            "ToggleLauncher",
-                            "Toggles the Application Launcher menu",
-                        )];
-
-                        let _ = proxy.bind_shortcuts(&session, &shortcuts, None).await;
-
-                        let mut activated_stream = match proxy.receive_activated().await {
-                            Ok(stream) => stream,
-                            Err(error) => {
-                                dbg!(error);
-                                return;
-                            }
-                        };
-
-                        loop {
-                            if let Some(event) = activated_stream.next().await {
-                                let _ = output
-                                    .send(ShellMessage::ShortcutActivated(
-                                        event.shortcut_id().to_string(),
-                                    ))
-                                    .await;
-                            };
+        iced::Subscription::batch(vec![
+            self.state
+                .launcher
+                .subscription()
+                .map(|message| ShellMessage::LauncherMessage(message)),
+            self.state
+                .bar
+                .subscription()
+                .map(|message| ShellMessage::BarMessage(message)),
+            Subscription::run(|| {
+                iced::stream::channel(10, async |mut output| {
+                    let proxy = match ashpd::desktop::global_shortcuts::GlobalShortcuts::new().await
+                    {
+                        Ok(proxy) => proxy,
+                        Err(error) => {
+                            dbg!(error);
+                            return;
                         }
-                    })
-                }),
-            ];
+                    };
 
-            subscriptions
-        })
+                    let session = match proxy.create_session().await {
+                        Ok(session) => session,
+                        Err(error) => {
+                            dbg!(error);
+                            return;
+                        }
+                    };
+
+                    let shortcuts = vec![ashpd::desktop::global_shortcuts::NewShortcut::new(
+                        "ToggleLauncher",
+                        "Toggles the Application Launcher menu",
+                    )];
+
+                    let _ = proxy.bind_shortcuts(&session, &shortcuts, None).await;
+
+                    let mut activated_stream = match proxy.receive_activated().await {
+                        Ok(stream) => stream,
+                        Err(error) => {
+                            dbg!(error);
+                            return;
+                        }
+                    };
+
+                    loop {
+                        if let Some(event) = activated_stream.next().await {
+                            let _ = output
+                                .send(ShellMessage::ShortcutActivated(
+                                    event.shortcut_id().to_string(),
+                                ))
+                                .await;
+                        };
+                    }
+                })
+            }),
+        ])
     }
 }
 
